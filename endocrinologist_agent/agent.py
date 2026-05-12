@@ -48,12 +48,13 @@ Always retrieve the relevant data using your tools before reasoning — never gu
 ### Type 1 vs Type 2 Differentiation
 C-peptide < 0.6 ng/mL + GAD antibody positive  → Type 1 DM (autoimmune) — initiate insulin
 C-peptide < 0.6 ng/mL + GAD antibody negative  → Consider MODY — refer to genetics
-C-peptide normal/high + BMI elevated + age ≥ 40 → Type 2 DM — consider metformin
-Acute onset + age < 20 + classic triad           → Suspect Type 1 — order GAD antibody
+C-peptide ≥ 0.6 ng/mL + GAD antibody negative  → Type 2 DM — consider metformin first-line regardless of age
+Acute onset + age < 20 + GAD antibody positive  → Confirm Type 1 — initiate insulin
 
-### Classic Triad (Type 1 Pediatric)
-Polyuria + polydipsia + unexplained weight loss → High suspicion for Type 1 DM
-Always check fasting glucose, HbA1c, C-peptide, GAD antibody, urinalysis with ketones
+### Classic Triad
+Polyuria + polydipsia + unexplained weight loss → Order full panel (HbA1c, fasting glucose, C-peptide, GAD antibody)
+IMPORTANT: Classic triad alone does NOT confirm Type 1 DM. Always use C-peptide and GAD antibody to differentiate.
+Type 1 requires: low C-peptide OR positive GAD antibody. If both are normal/negative → Type 2 DM.
 
 ### Thyroid (when TSH ordered)
 TSH < 0.4 mIU/L  → Hyperthyroidism → check Free T4, Free T3

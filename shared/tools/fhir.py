@@ -177,7 +177,7 @@ def get_active_medications(tool_context: ToolContext) -> dict:
     """
     Retrieves the patient's current active medication list from the FHIR server.
 
-    Queries MedicationRequest resources with status=active and returns medication
+    Queries MedicationStatement resources with status=active and returns medication
     names, dosage instructions, and prescribing dates.
     No arguments required.
     """
@@ -189,7 +189,7 @@ def get_active_medications(tool_context: ToolContext) -> dict:
     logger.info("tool_get_active_medications patient_id=%s", patient_id)
     try:
         bundle = _fhir_get(
-            fhir_url, fhir_token, "MedicationRequest",
+            fhir_url, fhir_token, "MedicationStatement",
             params={"patient": patient_id, "status": "active", "_count": "50"},
         )
     except httpx.HTTPStatusError as e:
@@ -206,13 +206,13 @@ def get_active_medications(tool_context: ToolContext) -> dict:
             or _coding_display(med_concept.get("coding", []))
             or res.get("medicationReference", {}).get("display", "Unknown")
         )
-        dosage_list = [d.get("text", "No dosage text") for d in res.get("dosageInstruction", [])]
+        dosage_list = [d.get("text", "No dosage text") for d in res.get("dosage", [])]
         medications.append({
-            "medication":  med_name,
-            "status":      res.get("status"),
-            "dosage":      dosage_list[0] if dosage_list else "Not specified",
-            "authored_on": res.get("authoredOn"),
-            "requester":   (res.get("requester") or {}).get("display"),
+            "medication":   med_name,
+            "status":       res.get("status"),
+            "dosage":       dosage_list[0] if dosage_list else "Not specified",
+            "date_asserted": res.get("dateAsserted"),
+            "prescriber":   (res.get("informationSource") or {}).get("display"),
         })
 
     return {
@@ -556,7 +556,86 @@ def create_observation(
         return _connection_error_result(e)
 
 
-# ── Tool: create medication (MedicationRequest) ───────────────────────────────
+# ── Tool: create condition ────────────────────────────────────────────────────
+
+def create_condition(
+    condition_name: str,
+    practitioner: str,
+    tool_context: ToolContext,
+    icd10_code: str = "",
+    severity: str = "",
+    onset_date: str = "",
+) -> dict:
+    """
+    Records a new clinical condition (diagnosis) for the current patient in the FHIR server.
+
+    Args:
+        condition_name: Name of the condition (e.g. "Migraine", "Hypertension").
+        practitioner:   Name of the recording clinician (e.g. "Dr. Smith").
+        icd10_code:     Optional ICD-10 code (e.g. "G43.909" for migraine).
+                        If omitted, the condition is recorded by display name only.
+        severity:       Optional severity text: "mild", "moderate", or "severe".
+        onset_date:     Optional onset date in YYYY-MM-DD format. Defaults to today.
+
+    Returns whether the Condition was successfully created.
+    """
+    ctx = _get_fhir_context(tool_context)
+    if isinstance(ctx, dict):
+        return ctx
+    fhir_url, fhir_token, patient_id = ctx
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recorded_date = onset_date or now[:10]
+
+    coding = [{"system": "http://hl7.org/fhir/sid/icd-10", "code": icd10_code, "display": condition_name}] if icd10_code else []
+
+    condition = {
+        "resourceType": "Condition",
+        "clinicalStatus": {
+            "coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical", "code": "active", "display": "Active"}]
+        },
+        "verificationStatus": {
+            "coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-ver-status", "code": "confirmed", "display": "Confirmed"}]
+        },
+        "code": {"coding": coding, "text": condition_name},
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "recordedDate": now,
+        "recorder": {"display": practitioner},
+    }
+
+    if severity:
+        condition["severity"] = {"text": severity}
+    if onset_date:
+        condition["onsetDateTime"] = onset_date
+
+    logger.info(
+        "tool_create_condition patient_id=%s condition=%s icd10=%s",
+        patient_id, condition_name, icd10_code,
+    )
+    try:
+        result = _fhir_post(fhir_url, fhir_token, "Condition", condition)
+        return {
+            "status": "success",
+            "message": f"Condition recorded: {condition_name}.",
+            "condition_id": result.get("id"),
+            "condition": condition_name,
+            "icd10_code": icd10_code or "not specified",
+            "recorded_by": practitioner,
+        }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (401, 403):
+            return {
+                "status": "error",
+                "write_supported": False,
+                "message": f"FHIR server rejected the write with HTTP {e.response.status_code} — server is read-only or token lacks write scopes.",
+            }
+        return _http_error_result(e)
+    except Exception as e:
+        return _connection_error_result(e)
+
+
+# ── Tool: create medication (MedicationStatement) ─────────────────────────────
 
 def create_medication(
     medication_name: str,
@@ -567,7 +646,7 @@ def create_medication(
     frequency: str = "",
 ) -> dict:
     """
-    Prescribes a new medication (MedicationRequest) for the current patient in the FHIR server.
+    Records a new medication (MedicationStatement) for the current patient in the FHIR server.
 
     Args:
         medication_name: Name of the medication (e.g. "Metformin", "Insulin glargine").
@@ -578,7 +657,7 @@ def create_medication(
         frequency:       Optional frequency text (e.g. "once daily", "BID").
                          If provided, added as a separate dosage timing note.
 
-    Returns whether the MedicationRequest was successfully created.
+    Returns whether the MedicationStatement was successfully created.
     """
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
@@ -588,21 +667,20 @@ def create_medication(
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    coding = [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": rx_norm_code, "display": medication_name}] if rx_norm_code else []
+    med_concept: dict = {"text": medication_name}
+    if rx_norm_code:
+        med_concept["coding"] = [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": rx_norm_code, "display": medication_name}]
+
     dosage_text = f"{dosage}. {frequency}".strip(". ") if frequency else dosage
 
-    medication_request = {
-        "resourceType": "MedicationRequest",
+    medication_statement = {
+        "resourceType": "MedicationStatement",
         "status": "active",
-        "intent": "order",
-        "medicationCodeableConcept": {
-            "coding": coding,
-            "text": medication_name,
-        },
+        "medicationCodeableConcept": med_concept,
         "subject": {"reference": f"Patient/{patient_id}"},
-        "authoredOn": now,
-        "requester": {"display": practitioner},
-        "dosageInstruction": [{"text": dosage_text}],
+        "dateAsserted": now,
+        "informationSource": {"display": practitioner},
+        "dosage": [{"text": dosage_text}],
     }
 
     logger.info(
@@ -610,11 +688,11 @@ def create_medication(
         patient_id, medication_name, practitioner,
     )
     try:
-        result = _fhir_post(fhir_url, fhir_token, "MedicationRequest", medication_request)
+        result = _fhir_post(fhir_url, fhir_token, "MedicationStatement", medication_statement)
         return {
             "status": "success",
-            "message": f"Medication prescribed: {medication_name} — {dosage_text}.",
-            "medication_request_id": result.get("id"),
+            "message": f"Medication recorded: {medication_name} — {dosage_text}.",
+            "medication_statement_id": result.get("id"),
             "medication": medication_name,
             "dosage": dosage_text,
             "prescriber": practitioner,

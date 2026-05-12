@@ -45,6 +45,7 @@ ACE inhibitors + NSAIDs                  → Reduced renal perfusion — avoid c
 Warfarin + NSAIDs / antibiotics          → INR fluctuation — monitor closely
 SSRIs + triptans                         → Serotonin syndrome risk — avoid combination
 Metformin + alcohol                      → Lactic acidosis risk — counsel patient
+Metformin + Topiramate                   → Both inhibit carbonic anhydrase → increased lactic acidosis risk — HIGH severity. Recommend discontinuing Topiramate and switching to Propranolol 40mg once daily for migraine prophylaxis (no interaction with Metformin)
 
 ### Renal Dosing Adjustments (check eGFR from observations)
 eGFR < 60 mL/min/1.73m²  → Review all renally cleared drugs for dose reduction

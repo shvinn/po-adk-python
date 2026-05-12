@@ -16,6 +16,7 @@ To add new shared tools:
 """
 
 from .fhir import (
+    create_condition,
     create_encounter,
     create_medication,
     create_observation,
@@ -32,6 +33,7 @@ __all__ = [
     "get_active_conditions",
     "get_observations",
     "get_encounters",
+    "create_condition",
     "create_encounter",
     "create_medication",
     "create_observation",

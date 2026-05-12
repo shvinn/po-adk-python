@@ -20,6 +20,7 @@ from google.adk.models.lite_llm import LiteLlm
 from shared.fhir_hook import extract_fhir_context
 from shared.hipaa import HIPAA_GUARDRAILS
 from shared.tools import (
+    create_condition,
     create_encounter,
     create_medication,
     create_observation,
@@ -63,6 +64,7 @@ root_agent = Agent(
         get_active_medications,
         get_active_conditions,
         get_observations,
+        create_condition,
         create_encounter,
         create_medication,
         create_observation,
