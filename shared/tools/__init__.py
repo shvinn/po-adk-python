@@ -6,7 +6,7 @@ FHIR tools (fhir.py)
   get_patient_demographics   Patient name, DOB, gender, contacts
   get_active_medications     Active MedicationRequest resources
   get_active_conditions      Active Condition resources (problem list)
-  get_recent_observations    Observation resources — vitals, labs, etc.
+  get_observations    Observation resources — vitals, labs, etc.
 
 To add new shared tools:
   1. Create a new file in shared/tools/ (e.g. scheduling.py).
@@ -16,15 +16,23 @@ To add new shared tools:
 """
 
 from .fhir import (
+    create_encounter,
+    create_medication,
+    create_observation,
     get_active_conditions,
     get_active_medications,
+    get_encounters,
     get_patient_demographics,
-    get_recent_observations,
+    get_observations,
 )
 
 __all__ = [
     "get_patient_demographics",
     "get_active_medications",
     "get_active_conditions",
-    "get_recent_observations",
+    "get_observations",
+    "get_encounters",
+    "create_encounter",
+    "create_medication",
+    "create_observation",
 ]

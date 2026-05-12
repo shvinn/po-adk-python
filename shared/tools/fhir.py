@@ -62,6 +62,22 @@ def _get_fhir_context(tool_context: ToolContext):
     return fhir_url, fhir_token, patient_id
 
 
+def _fhir_post(fhir_url: str, token: str, path: str, body: dict) -> dict:
+    """Perform an authenticated FHIR POST and return the parsed JSON response."""
+    response = httpx.post(
+        f"{fhir_url}/{path}",
+        json=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept":        "application/fhir+json",
+            "Content-Type":  "application/fhir+json",
+        },
+        timeout=_FHIR_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _fhir_get(fhir_url: str, token: str, path: str, params: dict | None = None) -> dict:
     """Perform an authenticated FHIR GET and return the parsed JSON response."""
     response = httpx.get(
@@ -258,7 +274,7 @@ def get_active_conditions(tool_context: ToolContext) -> dict:
 
 # ── Tool: recent observations (vitals / labs) ──────────────────────────────────
 
-def get_recent_observations(category: str, tool_context: ToolContext) -> dict:
+def get_observations(category: str, tool_context: ToolContext) -> dict:
     """
     Retrieves recent clinical observations for the patient from the FHIR server.
 
@@ -277,7 +293,7 @@ def get_recent_observations(category: str, tool_context: ToolContext) -> dict:
     fhir_url, fhir_token, patient_id = ctx
 
     category = (category or "vital-signs").strip().lower()
-    logger.info("tool_get_recent_observations patient_id=%s category=%s", patient_id, category)
+    logger.info("tool_get_observations patient_id=%s category=%s", patient_id, category)
     try:
         bundle = _fhir_get(
             fhir_url, fhir_token, "Observation",
@@ -336,3 +352,336 @@ def get_recent_observations(category: str, tool_context: ToolContext) -> dict:
         "count":        len(observations),
         "observations": observations,
     }
+
+
+# ── Tool: encounter history ────────────────────────────────────────────────────
+
+def get_encounters(tool_context: ToolContext) -> dict:
+    """
+    Retrieves the patient's doctor visit history from the FHIR server.
+
+    Returns all encounters sorted by date (newest first), including visit type,
+    reason, doctor name, and duration. No arguments required.
+    """
+    ctx = _get_fhir_context(tool_context)
+    if isinstance(ctx, dict):
+        return ctx
+    fhir_url, fhir_token, patient_id = ctx
+
+    logger.info("tool_get_encounters patient_id=%s", patient_id)
+    try:
+        bundle = _fhir_get(
+            fhir_url, fhir_token, "Encounter",
+            params={"patient": patient_id, "_sort": "-date", "_count": "50"},
+        )
+    except httpx.HTTPStatusError as e:
+        return _http_error_result(e)
+    except Exception as e:
+        return _connection_error_result(e)
+
+    encounters = []
+    for entry in bundle.get("entry", []):
+        res = entry.get("resource", {})
+
+        visit_type = None
+        for t in res.get("type", []):
+            visit_type = t.get("text") or _coding_display(t.get("coding", []))
+            if visit_type:
+                break
+
+        reason = None
+        for r in res.get("reasonCode", []):
+            reason = r.get("text") or _coding_display(r.get("coding", []))
+            if reason:
+                break
+
+        participants = [
+            p.get("individual", {}).get("display")
+            for p in res.get("participant", [])
+            if p.get("individual", {}).get("display")
+        ]
+
+        period = res.get("period", {})
+        encounters.append({
+            "encounter_id":  res.get("id"),
+            "status":        res.get("status"),
+            "visit_type":    visit_type,
+            "reason":        reason,
+            "start":         period.get("start"),
+            "end":           period.get("end"),
+            "practitioners": participants,
+            "class":         (res.get("class") or {}).get("display"),
+        })
+
+    return {
+        "status":      "success",
+        "patient_id":  patient_id,
+        "count":       len(encounters),
+        "encounters":  encounters,
+    }
+
+
+# ── Tool: create observation (lab result) ─────────────────────────────────────
+
+# LOINC codes for common lab results used in clinical demos.
+# Extend this table or pass a custom loinc_code argument to cover other tests.
+_LOINC_TABLE: dict[str, tuple[str, str]] = {
+    "hba1c":           ("4548-4",  "Hemoglobin A1c/Hemoglobin.total in Blood"),
+    "glucose":         ("1558-6",  "Fasting glucose [Mass/volume] in Serum or Plasma"),
+    "c-peptide":       ("1986-9",  "C peptide [Mass/volume] in Serum or Plasma"),
+    "gad antibody":    ("56695-0", "Glutamate decarboxylase Ab [Units/volume] in Serum"),
+    "ldl":             ("2089-1",  "Cholesterol in LDL [Mass/volume] in Serum or Plasma"),
+    "hdl":             ("2085-9",  "Cholesterol in HDL [Mass/volume] in Serum or Plasma"),
+    "triglycerides":   ("2571-8",  "Triglycerides [Mass/volume] in Serum or Plasma"),
+    "creatinine":      ("2160-0",  "Creatinine [Mass/volume] in Serum or Plasma"),
+    "potassium":       ("2823-3",  "Potassium [Moles/volume] in Serum or Plasma"),
+    "sodium":          ("2951-2",  "Sodium [Moles/volume] in Serum or Plasma"),
+    "tsh":             ("3016-3",  "Thyrotropin [Units/volume] in Serum or Plasma"),
+    "bnp":             ("42637-9", "Natriuretic peptide B [Mass/volume] in Serum or Plasma"),
+    "troponin":        ("6598-7",  "Troponin T.cardiac [Mass/volume] in Serum or Plasma"),
+    "egfr":            ("62238-1", "Glomerular filtration rate/1.73 sq M.predicted"),
+    "hemoglobin":      ("718-7",   "Hemoglobin [Mass/volume] in Blood"),
+}
+
+
+def create_observation(
+    test_name: str,
+    value: float,
+    unit: str,
+    tool_context: ToolContext,
+    loinc_code: str = "",
+    loinc_display: str = "",
+) -> dict:
+    """
+    Posts a new lab result (Observation) for the current patient to the FHIR server.
+
+    Args:
+        test_name:     Name of the lab test (e.g. "HbA1c", "glucose", "LDL").
+                       Used to look up the LOINC code automatically from the
+                       built-in table if loinc_code is not provided.
+        value:         Numeric result value (e.g. 9.2).
+        unit:          Unit of measure (e.g. "%", "mg/dL", "ng/mL", "mEq/L").
+        loinc_code:    Optional LOINC code override. If provided, skips the
+                       built-in lookup and uses this code directly.
+        loinc_display: Optional display name override for the LOINC code.
+
+    Returns whether the observation was successfully created.
+    """
+    ctx = _get_fhir_context(tool_context)
+    if isinstance(ctx, dict):
+        return ctx
+    fhir_url, fhir_token, patient_id = ctx
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Resolve LOINC code — explicit override takes priority, then table lookup.
+    key = test_name.strip().lower()
+    if loinc_code:
+        code = loinc_code
+        display = loinc_display or test_name
+    elif key in _LOINC_TABLE:
+        code, display = _LOINC_TABLE[key]
+    else:
+        # Partial match fallback
+        match = next(((c, d) for k, (c, d) in _LOINC_TABLE.items() if key in k or k in k), None)
+        if match:
+            code, display = match
+        else:
+            return {
+                "status": "error",
+                "error_message": (
+                    f"Unknown test name '{test_name}'. Provide a loinc_code explicitly, "
+                    f"or use one of: {', '.join(sorted(_LOINC_TABLE.keys()))}."
+                ),
+            }
+
+    observation = {
+        "resourceType": "Observation",
+        "status": "final",
+        "category": [
+            {
+                "coding": [
+                    {
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "laboratory",
+                        "display": "Laboratory",
+                    }
+                ]
+            }
+        ],
+        "code": {
+            "coding": [
+                {
+                    "system": "http://loinc.org",
+                    "code": code,
+                    "display": display,
+                }
+            ],
+            "text": test_name,
+        },
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "effectiveDateTime": now,
+        "issued": now,
+        "valueQuantity": {
+            "value": value,
+            "unit": unit,
+            "system": "http://unitsofmeasure.org",
+            "code": unit,
+        },
+    }
+
+    logger.info(
+        "tool_create_observation patient_id=%s test=%s loinc=%s value=%s %s",
+        patient_id, test_name, code, value, unit,
+    )
+    try:
+        result = _fhir_post(fhir_url, fhir_token, "Observation", observation)
+        return {
+            "status": "success",
+            "message": f"Lab result posted: {test_name} = {value} {unit}.",
+            "observation_id": result.get("id"),
+            "loinc_code": code,
+            "loinc_display": display,
+        }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (401, 403):
+            return {
+                "status": "error",
+                "write_supported": False,
+                "message": f"FHIR server rejected the write with HTTP {e.response.status_code} — server is read-only or token lacks write scopes.",
+            }
+        return _http_error_result(e)
+    except Exception as e:
+        return _connection_error_result(e)
+
+
+# ── Tool: create medication (MedicationRequest) ───────────────────────────────
+
+def create_medication(
+    medication_name: str,
+    dosage: str,
+    practitioner: str,
+    tool_context: ToolContext,
+    rx_norm_code: str = "",
+    frequency: str = "",
+) -> dict:
+    """
+    Prescribes a new medication (MedicationRequest) for the current patient in the FHIR server.
+
+    Args:
+        medication_name: Name of the medication (e.g. "Metformin", "Insulin glargine").
+        dosage:          Dosage instruction text (e.g. "500 mg twice daily with meals").
+        practitioner:    Name of the prescribing doctor (e.g. "Dr. Smith").
+        rx_norm_code:    Optional RxNorm code for the medication. If omitted, the
+                         medication is recorded by display name only.
+        frequency:       Optional frequency text (e.g. "once daily", "BID").
+                         If provided, added as a separate dosage timing note.
+
+    Returns whether the MedicationRequest was successfully created.
+    """
+    ctx = _get_fhir_context(tool_context)
+    if isinstance(ctx, dict):
+        return ctx
+    fhir_url, fhir_token, patient_id = ctx
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    coding = [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": rx_norm_code, "display": medication_name}] if rx_norm_code else []
+    dosage_text = f"{dosage}. {frequency}".strip(". ") if frequency else dosage
+
+    medication_request = {
+        "resourceType": "MedicationRequest",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+            "coding": coding,
+            "text": medication_name,
+        },
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "authoredOn": now,
+        "requester": {"display": practitioner},
+        "dosageInstruction": [{"text": dosage_text}],
+    }
+
+    logger.info(
+        "tool_create_medication patient_id=%s medication=%s prescriber=%s",
+        patient_id, medication_name, practitioner,
+    )
+    try:
+        result = _fhir_post(fhir_url, fhir_token, "MedicationRequest", medication_request)
+        return {
+            "status": "success",
+            "message": f"Medication prescribed: {medication_name} — {dosage_text}.",
+            "medication_request_id": result.get("id"),
+            "medication": medication_name,
+            "dosage": dosage_text,
+            "prescriber": practitioner,
+        }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (401, 403):
+            return {
+                "status": "error",
+                "write_supported": False,
+                "message": f"FHIR server rejected the write with HTTP {e.response.status_code} — server is read-only or token lacks write scopes.",
+            }
+        return _http_error_result(e)
+    except Exception as e:
+        return _connection_error_result(e)
+
+
+# ── Tool: create encounter ─────────────────────────────────────────────────────
+
+def create_encounter(reason: str, practitioner: str, tool_context: ToolContext) -> dict:
+    """
+    Creates a new doctor visit (Encounter) for the current patient in the FHIR server.
+
+    Args:
+        reason:       The reason for the visit (chief complaint or purpose).
+        practitioner: Name of the doctor or practitioner conducting the visit.
+
+    Returns whether the encounter was successfully created.
+    """
+    ctx = _get_fhir_context(tool_context)
+    if isinstance(ctx, dict):
+        return ctx
+    fhir_url, fhir_token, patient_id = ctx
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    encounter = {
+        "resourceType": "Encounter",
+        "status": "finished",
+        "class": {
+            "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+            "code": "AMB",
+            "display": "Ambulatory"
+        },
+        "type": [{"text": "General Practice Visit"}],
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "period": {"start": now, "end": now},
+        "participant": [{"individual": {"display": practitioner}}],
+        "reasonCode": [{"text": reason}],
+    }
+
+    logger.info("tool_create_encounter patient_id=%s reason=%s", patient_id, reason)
+    try:
+        result = _fhir_post(fhir_url, fhir_token, "Encounter", encounter)
+        return {
+            "status": "success",
+            "write_supported": True,
+            "message": f"Encounter created successfully.",
+            "encounter_id": result.get("id"),
+        }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (401, 403):
+            return {
+                "status": "error",
+                "write_supported": False,
+                "message": f"FHIR server rejected the write with HTTP {e.response.status_code} — server is read-only or token lacks write scopes.",
+            }
+        return _http_error_result(e)
+    except Exception as e:
+        return _connection_error_result(e)

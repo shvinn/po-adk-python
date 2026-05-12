@@ -36,7 +36,7 @@ a2a_app = create_a2a_app(
         {"name": "patient/Patient.rs",           "required": True},   # get_patient_demographics
         {"name": "patient/MedicationRequest.rs", "required": True},   # get_active_medications
         {"name": "patient/Condition.rs",         "required": True},   # get_active_conditions
-        {"name": "patient/Observation.rs",       "required": True},   # get_recent_observations
+        {"name": "patient/Observation.cruds",    "required": True},   # get_observations + create_observation
     ],
     skills=[
         AgentSkill(

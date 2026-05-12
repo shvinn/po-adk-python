@@ -96,6 +96,21 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 original_method, parsed["method"],
             )
 
+        # Strip taskId from message/send params so PO's follow-up messages always
+        # create a new task rather than trying to continue a completed one.
+        # A completed task rejects new messages with -32602; removing taskId forces
+        # the A2A SDK to create a fresh task for each conversation turn.
+        # contextId is preserved so FHIR session state remains available.
+        if (
+            isinstance(parsed, dict)
+            and parsed.get("method") == "message/send"
+            and isinstance(parsed.get("params"), dict)
+            and "taskId" in parsed["params"]
+        ):
+            removed_task_id = parsed["params"].pop("taskId")
+            body_dirty = True
+            logger.info("task_id_stripped removed_task_id=%s", removed_task_id)
+
         # Normalise proto-style role values in every message in the payload.
         # Prompt Opinion sends ROLE_USER / ROLE_AGENT; the a2a-sdk expects user / agent.
         def _fix_roles(node):

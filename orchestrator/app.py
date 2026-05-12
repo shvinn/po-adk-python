@@ -20,9 +20,9 @@ a2a_app = create_a2a_app(
     agent=root_agent,
     name="orchestrator",
     description=(
-        "A clinical orchestrator that routes questions to specialist sub-agents: "
-        "healthcare_fhir_agent for patient record queries, "
-        "general_agent for date/time and ICD-10 lookups."
+        "ClinIQ clinical orchestrator. Triages and routes requests to specialist agents: "
+        "endocrinologist, cardiologist, neurologist, pharmacist, healthcare FHIR, and general. "
+        "The single entry point for all clinical queries."
     ),
     url=os.getenv("ORCHESTRATOR_URL", os.getenv("BASE_URL", "http://localhost:8003")),
     port=8003,
@@ -32,17 +32,21 @@ a2a_app = create_a2a_app(
     # Same SMART scopes as healthcare_agent — the orchestrator delegates to it
     # in-process and the credentials flow through shared session state.
     fhir_scopes=[
-        {"name": "patient/Patient.rs",           "required": True},   # via healthcare_agent
-        {"name": "patient/MedicationRequest.rs", "required": True},   # via healthcare_agent
-        {"name": "patient/Condition.rs",         "required": True},   # via healthcare_agent
-        {"name": "patient/Observation.rs",       "required": True},   # via healthcare_agent
+        {"name": "patient/Patient.rs",           "required": True},
+        {"name": "patient/MedicationRequest.rs", "required": True},
+        {"name": "patient/Condition.rs",         "required": True},
+        {"name": "patient/Observation.cruds",    "required": True},
+        {"name": "patient/Encounter.cruds",      "required": True},
     ],
     skills=[
         AgentSkill(
             id="clinical-orchestration",
             name="clinical-orchestration",
-            description="Routes questions to specialist agents (demographics, medications, vitals, ICD-10, date/time) to answer clinical queries.",
-            tags=["clinical", "orchestrator", "routing"],
+            description=(
+                "Triages clinical queries and routes to specialist agents: "
+                "endocrinologist, cardiologist, neurologist, pharmacist, FHIR data, and general utilities."
+            ),
+            tags=["clinical", "orchestrator", "routing", "triage"],
         ),
     ],
 )
