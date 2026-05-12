@@ -41,7 +41,7 @@ fhir_agent   ologist    ogist     agent         agent
 
 The diagram below traces a real two-round consultation — from a clinician describing symptoms, through specialist routing, lab posting, diagnosis, and final FHIR write-back.
 
-<img src="agents-assemble.jpeg" alt="ClinIQ end-to-end clinical flow" height="600"/>
+<img src="agents-assemble.jpeg" alt="ClinIQ end-to-end clinical flow" height="700"/>
 
 **What the diagram shows:**
 
