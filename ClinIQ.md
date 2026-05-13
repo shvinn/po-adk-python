@@ -19,30 +19,6 @@ A team of six specialist AI agents, each equipped with a clinical rule book, col
 
 ---
 
-## End-to-End Clinical Flow
-
-The diagram below traces a real two-round consultation — from a clinician describing symptoms, through specialist routing, lab posting, diagnosis, and final FHIR write-back.
-
-<img src="agents-assemble.jpeg" alt="ClinIQ end-to-end clinical flow" height="700"/>
-
-**What the diagram shows:**
-
-| Step | Actor | What happens |
-|---|---|---|
-| Round 1 input | Clinician | Fatigue, thirst, polyuria, weight loss — no lab values yet |
-| Triage | Orchestrator | Keyword match → Level 2; no inline labs → skip FHIR write |
-| Phase 1 | Endocrinologist | `get_observations()` returns empty; classic triad → T2D suspected; orders HbA1c, glucose, C-peptide, GAD, UA |
-| Await labs | Orchestrator | Presents orders to clinician |
-| Round 2 input | Clinician | HbA1c 8.1%, fasting glucose 185 mg/dL, C-peptide 1.8 ng/mL |
-| FHIR write | Orchestrator | Inline labs detected → `create_observation` ×3 before routing |
-| Phase 2 | Endocrinologist | HbA1c ≥ 6.5% + glucose ≥ 126 confirmed; C-peptide normal + BMI elevated → **Type 2 DM (E11.9)** — start Metformin |
-| Auto-trigger | Orchestrator | T2D confirmed → simultaneously routes to neurologist + pharmacist |
-| Neuro screen | Neurologist | Baseline neuropathy screen; no signs detected; annual review + podiatry referral |
-| Med safety | Pharmacist | eGFR ≥ 60 → Metformin safe; 500 mg BID, titrate 4 weeks; counsel on alcohol and hold for contrast |
-| Final assembly | Orchestrator | Unified reply: diagnosis + neuro baseline + Metformin plan; prompts clinician to confirm encounter → `create_encounter` |
-
----
-
 ## Agents
 
 ### Orchestrator
